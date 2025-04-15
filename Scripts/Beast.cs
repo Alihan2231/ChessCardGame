@@ -18,12 +18,40 @@ public class Beast : MonoBehaviour
         return board.IsCellActive(target);
     }
 
-    public void Move(Vector2Int target, BoardManager board)
+    public Tile currentTile;
+    private bool isMoving = false;
+
+    public void MoveToPosition(Tile targetTile)
     {
-        if (CanMove(target, board))
+        if (targetTile == null || !targetTile.isActive)
+            return;
+
+        // Önceki karenin referansını temizle
+        if (currentTile != null)
+            currentTile.currentBeast = null;
+
+        // Yeni kareye yerleş
+        currentTile = targetTile;
+        currentTile.currentBeast = this;
+
+        // Yumuşak hareket animasyonu
+        StartCoroutine(SmoothMovement(targetTile.transform.position));
+    }
+
+    private System.Collections.IEnumerator SmoothMovement(Vector3 targetPosition)
+    {
+        isMoving = true;
+        targetPosition.y = transform.position.y;
+        float sqrRemainingDistance = (transform.position - targetPosition).sqrMagnitude;
+        float moveSpeed = 5f;
+        while (sqrRemainingDistance > float.Epsilon)
         {
-            position = target;
-            transform.position = new Vector3(target.x, 0.5f, target.y);
+            Vector3 newPosition = Vector3.MoveTowards(transform.position, targetPosition, moveSpeed * Time.deltaTime);
+            transform.position = newPosition;
+            sqrRemainingDistance = (transform.position - targetPosition).sqrMagnitude;
+            yield return null;
         }
+        transform.position = targetPosition;
+        isMoving = false;
     }
 }

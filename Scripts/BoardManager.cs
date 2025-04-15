@@ -30,7 +30,7 @@ public class BoardManager : MonoBehaviour
     public int height = 8;
     public GameObject tilePrefab;
     public GameObject piecePrefab;
-    private GameObject[,] tiles;
+    public Tile[,] tiles;
     private List<GameObject> activeTiles = new List<GameObject>();
     [Header("Enemy Prefabs (çeşitli düşmanlar için)")]
     public List<GameObject> enemyPrefabs;
@@ -371,25 +371,132 @@ public class BoardManager : MonoBehaviour
         }
     }
 
-    void GenerateBoard()
-    {
-        tiles = new GameObject[width, height];
-        for (int x = 0; x < width; x++)
-        {
-            for (int y = 0; y < height; y++)
-            {
-                Vector3 pos = new Vector3(x + y * 0.5f, y * 0.866f, 0); // izometrik görünüm için
-                GameObject tile = Instantiate(tilePrefab, pos, Quaternion.identity, transform);
-                tile.name = $"Tile_{x}_{y}";
-                tiles[x, y] = tile;
-                Tile tileScript = tile.GetComponent<Tile>();
-                if (tileScript != null)
-                {
-                    tileScript.SetCoords(x, y);
-                    tileScript.SetActive(true, instant: true);
+    public int boardWidth;
+    public int boardHeight;
+    public float tileSize = 1.0f;
+    public GameObject blackTilePrefab;
+    public GameObject whiteTilePrefab;
+    public bool hasStartedShrinking = false;
+    public float shrinkInterval = 5.0f;
+    public int minBoardSize = 4;
+
+    public void CreateBoard(int width, int height) {
+        tiles = new Tile[width, height];
+        boardWidth = width;
+        boardHeight = height;
+        
+        // Referans pozisyonu (sol alt köşe)
+        Vector3 boardStart = transform.position - new Vector3(width / 2f * tileSize, 0, height / 2f * tileSize);
+        
+        for (int x = 0; x < width; x++) {
+            for (int z = 0; z < height; z++) {
+                // Kare pozisyonunu hesapla
+                Vector3 tilePosition = boardStart + new Vector3(x * tileSize, 0, z * tileSize);
+                
+                // Kareyi oluştur (beyaz/siyah dama deseni)
+                bool isBlackTile = (x + z) % 2 == 1;
+                GameObject tilePrefab = isBlackTile ? blackTilePrefab : whiteTilePrefab;
+                
+                GameObject tileObject = Instantiate(tilePrefab, tilePosition, Quaternion.identity);
+                tileObject.transform.parent = transform;
+                tileObject.name = $"Tile_{x}_{z}";
+                
+                // Tile bileşenini al ve ayarla
+                Tile tile = tileObject.GetComponent<Tile>();
+                if (tile != null) {
+                    tile.Initialize(x, z, isBlackTile);
+                    tile.isWalkable = true; // Başlangıçta tüm kareler yürünebilir
+                    tiles[x, z] = tile;
                 }
             }
         }
+        
+        // Başlangıç ​​durumunda tahta daralmıyor
+        hasStartedShrinking = false;
+    }
+
+    public void ShrinkBoard() {
+        if (!hasStartedShrinking) {
+            hasStartedShrinking = true;
+            StartCoroutine(ShrinkBoardRoutine());
+        }
+    }
+
+    private IEnumerator ShrinkBoardRoutine() {
+        // Daralmayı bekle
+        yield return new WaitForSeconds(shrinkInterval);
+        
+        while (boardWidth > minBoardSize && boardHeight > minBoardSize) {
+            // Kenarlardan birer kare sil
+            for (int x = 0; x < boardWidth; x++) {
+                DestroyTileAt(x, 0); // Alt kenar
+                DestroyTileAt(x, boardHeight - 1); // Üst kenar
+            }
+            
+            for (int z = 1; z < boardHeight - 1; z++) {
+                DestroyTileAt(0, z); // Sol kenar
+                DestroyTileAt(boardWidth - 1, z); // Sağ kenar
+            }
+            
+            // Boyutları güncelle
+            boardWidth -= 2;
+            boardHeight -= 2;
+            
+            // Yeni sınırların içindeki kareleri kaydır
+            Tile[,] newTiles = new Tile[boardWidth, boardHeight];
+            for (int x = 0; x < boardWidth; x++) {
+                for (int z = 0; z < boardHeight; z++) {
+                    newTiles[x, z] = tiles[x + 1, z + 1];
+                }
+            }
+            tiles = newTiles;
+            
+            // Bir sonraki daralmayı bekle
+            yield return new WaitForSeconds(shrinkInterval);
+        }
+    }
+
+    private void DestroyTileAt(int x, int z) {
+        if (x >= 0 && x < boardWidth && z >= 0 && z < boardHeight) {
+            Tile tile = tiles[x, z];
+            if (tile != null) {
+                // Kare üzerinde yaratık varsa ne yapacağız?
+                if (tile.currentBeast != null) {
+                    tile.currentBeast.Die(); // Yaratık ölsün
+                }
+                
+                tile.isWalkable = false;
+                
+                // Görsel efekt
+                StartCoroutine(AnimateTileDestruction(tile));
+            }
+        }
+    }
+
+    private IEnumerator AnimateTileDestruction(Tile tile) {
+        // Kare yok olma animasyonu
+        float duration = 1.0f;
+        float elapsed = 0f;
+        
+        Vector3 startScale = tile.transform.localScale;
+        Color startColor = tile.GetComponentInChildren<Renderer>().material.color;
+        
+        while (elapsed < duration) {
+            float t = elapsed / duration;
+            
+            // Kareyi küçült
+            tile.transform.localScale = Vector3.Lerp(startScale, Vector3.zero, t);
+            
+            // Rengi değiştir (kırmızıya doğru)
+            if (tile.GetComponentInChildren<Renderer>() != null) {
+                tile.GetComponentInChildren<Renderer>().material.color = Color.Lerp(startColor, Color.red, t);
+            }
+            
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+        
+        Destroy(tile.gameObject);
     }
 
     void SpawnPieces()
