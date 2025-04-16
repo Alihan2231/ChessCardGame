@@ -1,0 +1,77 @@
+import { useState, useEffect } from "react";
+import { useAudio } from "./lib/stores/useAudio";
+import { useGameStore } from "./lib/stores/useGameStore";
+import "@fontsource/inter";
+import Board from "./components/game/Board";
+import CardHand from "./components/game/CardHand";
+import CardDeck from "./components/game/CardDeck";
+import GameUI from "./components/game/GameUI";
+import TurnIndicator from "./components/game/TurnIndicator";
+import { initAudioAssets } from "./lib/utils/audioManager";
+
+function App() {
+  const [isLoading, setIsLoading] = useState(true);
+  const { startGame, phase } = useGameStore();
+  
+  // Initialize the game audio
+  useEffect(() => {
+    const loadAudio = async () => {
+      await initAudioAssets();
+      setIsLoading(false);
+    };
+    loadAudio();
+  }, []);
+
+  const handleStartGame = () => {
+    startGame();
+  };
+
+  // Loading screen
+  if (isLoading) {
+    return (
+      <div className="flex justify-center items-center h-screen bg-gray-900">
+        <div className="text-white text-2xl">Loading game assets...</div>
+      </div>
+    );
+  }
+
+  // Menu screen
+  if (phase === "menu") {
+    return (
+      <div className="flex flex-col justify-center items-center h-screen bg-gray-900 text-white">
+        <h1 className="text-5xl font-bold mb-8">BeastChess</h1>
+        <p className="text-xl mb-10">A chess-like strategy game with animal pieces and card mechanics</p>
+        <button 
+          onClick={handleStartGame}
+          className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-6 rounded-lg text-xl transition duration-200"
+        >
+          Start Game
+        </button>
+      </div>
+    );
+  }
+
+  // Main game screen
+  return (
+    <div className="flex flex-col lg:flex-row h-screen w-screen bg-gray-800 overflow-hidden">
+      {/* Game board area */}
+      <div className="flex-1 flex flex-col items-center justify-center p-2 lg:p-4">
+        <div className="relative">
+          <Board />
+          <TurnIndicator />
+        </div>
+      </div>
+      
+      {/* Game UI and cards area */}
+      <div className="h-1/3 lg:h-full lg:w-1/4 bg-gray-900 p-4 flex flex-col">
+        <GameUI />
+        <div className="mt-auto">
+          <CardDeck />
+          <CardHand />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default App;
