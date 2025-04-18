@@ -140,30 +140,91 @@ def detect_arp_spoofing(arp_table):
     suspicious_entries = []
     mac_to_ips = defaultdict(list)
     
-    # Her MAC adresine bağlı IP'leri topla
+    # Güvenli MAC adresleri ve öneklerini tanımla
+    safe_mac_prefixes = [
+        "01:", "03:", "05:", "07:", "09:", "0b:", "0d:", "0f:",  # Multicast
+        "33:33",  # IPv6 multicast
+        "01:00:5e",  # IPv4 multicast
+        "00:00:00"  # Geçersiz veya çözümlenmemiş
+    ]
+    safe_mac_addresses = [
+        "ff:ff:ff:ff:ff:ff",  # Broadcast
+    ]
+    
+    # Güvenli IP adres aralıkları
+    safe_ip_prefixes = [
+        "224.0.0.",  # Local Network Control Block
+        "239.255.255.",  # Local Scope
+        "127.",  # Loopback
+        "255.255.255.",  # Broadcast
+        "169.254.",  # Link-local
+        "0.0.0."  # Geçersiz
+    ]
+    
+    # Her MAC adresine bağlı IP'leri topla (güvenli olmayanları)
     for entry in arp_table:
         mac = entry["mac"].lower()  # Büyük/küçük harf duyarlılığını kaldır
         ip = entry["ip"]
         
-        # Broadcast MAC adresini atla (normal bir ağ özelliği, saldırı değil)
-        if mac == "ff:ff:ff:ff:ff:ff":
+        # MAC adresi güvenli mi kontrol et
+        safe_mac = False
+        for prefix in safe_mac_prefixes:
+            if mac.startswith(prefix):
+                safe_mac = True
+                break
+        
+        if mac in safe_mac_addresses:
+            safe_mac = True
+            
+        # IP adresi güvenli mi kontrol et
+        safe_ip = False
+        for prefix in safe_ip_prefixes:
+            if ip.startswith(prefix):
+                safe_ip = True
+                break
+                
+        # Özel IP adresleri için ek kontroller - genellikle güvenli
+        if ip.startswith("192.168.") and mac.startswith(("ff:ff:ff", "01:00:5e")):
+            safe_mac = True
+            
+        # Özel durum: Bazı standard network cihazları için güvenlik
+        if ":" in mac or "-" in mac:  # MAC adresi doğru formatta ise
+            parts = mac.replace("-", ":").split(":")
+            if len(parts) == 6 and parts[0] == "01" and parts[1] == "00":
+                safe_mac = True  # Standard protokoller için ayrılmış MAC'ler
+        
+        # Router/gateway için özel kontrol - birden fazla IP'si olabilir
+        if ip.endswith(".1") or ip.endswith(".254"):  # Gateway IP'leri genellikle
+            # Bu bir router olabilir, dikkatli değerlendir
+            # Router'lar normal şartlarda birden fazla IP'ye sahip olabilir
             continue
             
-        # Multicast MAC adresini atla (normal bir ağ özelliği, saldırı değil)
-        if mac.startswith(("01:", "03:", "05:", "07:", "09:", "0b:", "0d:", "0f:")):
-            continue
-            
-        mac_to_ips[mac].append(ip)
+        # Sadece şüpheli olabilecek girdileri ekle (safe_mac veya safe_ip değilse)
+        if not safe_mac and not safe_ip:
+            mac_to_ips[mac].append(ip)
     
-    # Bir MAC'in birden fazla IP'si varsa (1'den çok cihaz olabilir)
+    # İzin verilen maksimum IP sayısı - router'lar için daha yüksek
+    max_allowed_ips = 3  # En fazla 3 IP normal kabul edilsin
+    
+    # Bir MAC'in birden fazla IP'si varsa (şüpheli bir durum olabilir)
     for mac, ips in mac_to_ips.items():
         if len(ips) > 1:
-            suspicious_entries.append({
-                "type": "multiple_ips",
-                "mac": mac,
-                "ips": ips,
-                "message": f"⚠️ Şüpheli: {mac} MAC adresine sahip {len(ips)} farklı IP adresi var: {', '.join(ips)}"
-            })
+            # Az sayıda IP sadece bilgi olarak göster
+            if len(ips) <= max_allowed_ips:
+                suspicious_entries.append({
+                    "type": "info_other",  # Bilgi olarak işaretle, filtrele
+                    "mac": mac,
+                    "ips": ips,
+                    "message": f"📌 Bilgi: {mac} MAC adresine sahip {len(ips)} farklı IP var: {', '.join(ips)} - Router olabilir"
+                })
+            else:
+                # Çok sayıda IP gerçekten şüpheli
+                suspicious_entries.append({
+                    "type": "multiple_ips",
+                    "mac": mac,
+                    "ips": ips,
+                    "message": f"⚠️ Şüpheli: {mac} MAC adresine sahip {len(ips)} farklı IP adresi var: {', '.join(ips)}"
+                })
     
     # Ağ geçidinin MAC adresi değişmiş mi kontrol et
     gateway = get_default_gateway()
@@ -171,32 +232,62 @@ def detect_arp_spoofing(arp_table):
         gateway_entries = [entry for entry in arp_table if entry["ip"] == gateway["ip"]]
         if len(gateway_entries) > 0:
             if len(gateway_entries) > 1:
-                suspicious_entries.append({
-                    "type": "gateway_multiple_macs",
-                    "ip": gateway["ip"],
-                    "macs": [entry["mac"] for entry in gateway_entries],
-                    "message": f"❌ TEHLİKE: Ağ geçidi {gateway['ip']} için birden fazla MAC adresi var!"
-                })
+                # Aynı IP'ye sahip birden fazla MAC sadece farklı MAC'ler güvenli olmayan MAC'ler değilse
+                unsafe_gateway_macs = []
+                for entry in gateway_entries:
+                    mac = entry["mac"].lower()
+                    
+                    # MAC adresi güvenli mi kontrol et
+                    safe_mac = False
+                    for prefix in safe_mac_prefixes:
+                        if mac.startswith(prefix):
+                            safe_mac = True
+                            break
+                    
+                    if mac in safe_mac_addresses:
+                        safe_mac = True
+                        
+                    if not safe_mac:
+                        unsafe_gateway_macs.append(mac)
+                
+                # Sadece güvenli olmayan MAC'ler varsa uyarı göster
+                if len(unsafe_gateway_macs) > 1:
+                    suspicious_entries.append({
+                        "type": "gateway_multiple_macs",
+                        "ip": gateway["ip"],
+                        "macs": unsafe_gateway_macs,
+                        "message": f"❌ TEHLİKE: Ağ geçidi {gateway['ip']} için birden fazla MAC adresi var!"
+                    })
     
     # Bilgi amaçlı özel MAC adreslerini ekle (saldırı değil)
     info_entries = []
     for entry in arp_table:
         mac = entry["mac"].lower()
+        ip = entry["ip"]
+        
         # Broadcast MAC (ff:ff:ff:ff:ff:ff)
         if mac == "ff:ff:ff:ff:ff:ff":
             info_entries.append({
                 "type": "info_broadcast",
-                "ip": entry["ip"],
+                "ip": ip,
                 "mac": mac,
-                "message": f"📌 Bilgi: Broadcast MAC adresi: IP={entry['ip']}, MAC={mac}"
+                "message": f"📌 Bilgi: Broadcast MAC adresi: IP={ip}, MAC={mac}"
             })
-        # Multicast MAC (ilk byte'ın en düşük biti 1)
-        elif mac.startswith(("01:", "03:", "05:", "07:", "09:", "0b:", "0d:", "0f:")):
+        # Multicast MAC
+        elif any(mac.startswith(prefix) for prefix in safe_mac_prefixes):
             info_entries.append({
                 "type": "info_multicast",
-                "ip": entry["ip"],
+                "ip": ip,
                 "mac": mac,
-                "message": f"📌 Bilgi: Multicast MAC adresi: IP={entry['ip']}, MAC={mac}"
+                "message": f"📌 Bilgi: Özel MAC adresi: IP={ip}, MAC={mac}"
+            })
+        # Özel IP adresleri
+        elif any(ip.startswith(prefix) for prefix in safe_ip_prefixes):
+            info_entries.append({
+                "type": "info_special_ip",
+                "ip": ip,
+                "mac": mac,
+                "message": f"📌 Bilgi: Özel IP adresi: IP={ip}, MAC={mac}"
             })
     
     # Bilgi amaçlı girdileri listeye ekle (şüpheli durumlar listesinin sonuna)
@@ -589,15 +680,45 @@ class ARP_GUI:
     
     def _update_ui(self, is_safe, important_lines, suspicious_entries):
         """Tarama sonuçlarına göre arayüzü günceller"""
-        # Gerçekten tehlikeli durumları filtrele - sadece info olmayan girdiler ve diğer filtreleme
+        # Gerçekten tehlikeli durumları filtrele - sadece gerçek tehditler için
         real_threats = []
-        false_alarms = ["broadcast_mac", "multicast_mac", "info_broadcast_multicast", "info_other"]
+        
+        # Tüm bilgi ve yanlış alarmlar için genişletilmiş liste 
+        safe_types = [
+            "info_broadcast", "info_multicast", "info_special_ip", 
+            "info_other", "info_broadcast_multicast", 
+            "broadcast_mac", "multicast_mac"
+        ]
         
         for entry in suspicious_entries:
+            # entry tipini al
             entry_type = entry.get("type", "")
-            # Sadece gerçek tehditleri kabul et
-            if not any(alarm in entry_type for alarm in false_alarms):
-                real_threats.append(entry)
+            
+            # Bilgi mesajlarını atla - tüm "info_" ile başlayan tipler
+            if entry_type.startswith("info_"):
+                continue
+                
+            # Diğer güvenli MAC/IP tiplerini atla 
+            if entry_type in safe_types:
+                continue
+                
+            # Mesaj içeriğini kontrol et - bazı durumlarda mesaj içeriği önemli olabilir
+            message = entry.get("message", "").lower()
+            
+            # "01:00:5e" gibi multicast MAC adresleri güvenlidir
+            if "01:00:5e" in message or "33:33" in message or "ff:ff:ff" in message:
+                continue
+                
+            # "224.0.0" gibi özel IP'leri içeren mesajlar güvenlidir 
+            if "224.0.0" in message or "239.255.255" in message:
+                continue
+                
+            # "normal" ibaresi olan mesajları atla
+            if "normal" in message or "bilgi" in message:
+                continue
+                
+            # Geriye kalan girdiler gerçek tehdit olarak kabul edilir
+            real_threats.append(entry)
         
         # Gerçekten tehlike var mı kontrol et (sadece gerçek tehdit olduğunda)
         is_truly_safe = len(real_threats) == 0
