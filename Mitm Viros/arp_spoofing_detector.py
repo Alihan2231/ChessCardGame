@@ -458,13 +458,35 @@ class ARP_GUI:
             important_lines = []
             
             for line in scan_output.split('\n'):
-                if "⚠️" in line or "❌" in line:
-                    is_safe = False
+                # Tehlikeli durumlar
+                if "⚠️" in line:
                     suspicious_entries.append({
                         "message": line,
-                        "type": "gateway_multiple_macs" if "TEHLİKE" in line else "other"
+                        "type": "other"
                     })
                     important_lines.append(line)
+                    is_safe = False
+                elif "❌" in line:
+                    suspicious_entries.append({
+                        "message": line,
+                        "type": "gateway_multiple_macs"
+                    })
+                    important_lines.append(line)
+                    is_safe = False
+                # Bilgi satırları
+                elif "📌" in line:
+                    if "Broadcast MAC adresi" in line or "Multicast MAC adresi" in line:
+                        suspicious_entries.append({
+                            "message": line,
+                            "type": "info_broadcast_multicast"
+                        })
+                    else:
+                        suspicious_entries.append({
+                            "message": line,
+                            "type": "info_other"
+                        })
+                    important_lines.append(line)
+                # Başarı durumları
                 elif "✅" in line:
                     important_lines.append(line)
             
@@ -490,8 +512,14 @@ class ARP_GUI:
     
     def _update_ui(self, is_safe, important_lines, suspicious_entries):
         """Tarama sonuçlarına göre arayüzü günceller"""
+        # Gerçekten tehlikeli durumları filtrele - sadece info olmayan girdiler
+        real_threats = [entry for entry in suspicious_entries if not entry.get("type", "").startswith("info_")]
+        
+        # Gerçekten tehlike var mı kontrol et
+        is_truly_safe = len(real_threats) == 0
+        
         # Sonuç kartını güncelle
-        if is_safe:
+        if is_truly_safe:
             self.status_icon.config(text="✅")
             self.status_title.config(text="Ağınız Güvende", fg=self.success_color)
             self.status_text.config(text="Herhangi bir ARP spoofing tehdidi tespit edilmedi.")
@@ -502,9 +530,9 @@ class ARP_GUI:
             self.status_text.config(text="Ağınızda şüpheli ARP etkinliği tespit edildi! Detaylar için aşağıya bakın.")
             self.result_card.config(highlightbackground=self.warning_color)
             
-            # Şüpheli durum varsa uyarı penceresi göster
-            if len(suspicious_entries) > 0:
-                self.root.after(500, lambda: self.show_warning(suspicious_entries))
+            # Gerçek şüpheli durum varsa uyarı penceresi göster
+            if len(real_threats) > 0:
+                self.root.after(500, lambda: self.show_warning(real_threats))
         
         # Sonuç metnini güncelle
         self.result_text.config(state=tk.NORMAL)
